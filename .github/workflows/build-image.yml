@@ -24,7 +24,7 @@ jobs:
         name: Enumerate Dockerfiles
         run: |
           matrix="$(dirname */Dockerfile | sort -rn | jq -csR 'rtrimstr("\n") | split("\n") | { directory: . }')"
-          echo "::set-output name=matrix::$matrix"
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
   build-image:
     needs: generate-matrix
     runs-on: ubuntu-latest
@@ -62,9 +62,34 @@ jobs:
         run: |
           dir='${{ matrix.directory }}'
           img="perl:${dir//,/-}"
+          if [[ "$dir" != *"slim"* ]]; then
+            docker run "$img" cpanm -v Try::Tiny@0.30
+            docker run "$img" cpanm -v Net::DNS@1.45_02
+          fi
           docker run "$img" cpanm -v Mojolicious
+      - name: Run cpanm no-lwp by default test
+        run: |
+          dir='${{ matrix.directory }}'
+          img="perl:${dir//,/-}"
+          if [[ "$dir" != *"slim"* ]]; then
+            docker run "$img" bash -c "cpanm -v -n LWP && cpanm -v -n local::lib"
+          fi
       - name: Run cpm install test
         run: |
           dir='${{ matrix.directory }}'
           img="perl:${dir//,/-}"
+          if [[ "$dir" != *"slim"* ]]; then
+            docker run "$img" cpm install -v Try::Tiny@0.30
+            docker run "$img" cpm install -v Net::DNS@1.45_02
+          fi
           docker run "$img" cpm install -v Mojolicious
+      - name: COPY all to default WORKDIR
+        run: |
+          dir='${{ matrix.directory }}'
+          img="perl:${dir//,/-}"
+          mkdir -p test/lib
+          cat <<EOF >Dockerfile
+          FROM $img
+          COPY . .
+          EOF
+          docker build -f Dockerfile test

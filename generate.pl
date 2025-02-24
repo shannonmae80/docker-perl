@@ -3,7 +3,9 @@ use 5.014;
 use strict;
 use warnings;
 use YAML::XS;
+use CPAN::Perl::Releases::MetaCPAN;
 use Devel::PatchPerl;
+use File::Basename;
 use LWP::Simple;
 
 sub die_with_sample {
@@ -62,7 +64,7 @@ EOF
 chomp $docker_slim_run_install;
 
 my $docker_slim_run_purge = <<'EOF';
-savedPackages="ca-certificates make netbase zlib1g-dev libssl-dev" \
+savedPackages="ca-certificates curl make netbase zlib1g-dev libssl-dev" \
     && apt-mark auto '.*' > /dev/null \
     && apt-mark manual $savedPackages \
     && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
@@ -83,17 +85,38 @@ my $template = do {
 
 my %builds;
 
-# sha256 taken from http://www.cpan.org/authors/id/M/MI/MIYAGAWA/CHECKSUMS
-my %cpanm = (
-  name   => "App-cpanminus-1.7046",
-  url    => "https://www.cpan.org/authors/id/M/MI/MIYAGAWA/App-cpanminus-1.7046.tar.gz",
-  sha256 => "3e8c9d9b44a7348f9acc917163dbfc15bd5ea72501492cea3a35b346440ff862",
+my %install_modules = (
+  cpanm => {
+    name => "App-cpanminus-1.7047",
+    url  => "https://www.cpan.org/authors/id/M/MI/MIYAGAWA/App-cpanminus-1.7047.tar.gz",
+
+    # sha256 taken from http://www.cpan.org/authors/id/M/MI/MIYAGAWA/CHECKSUMS
+    sha256 => "963e63c6e1a8725ff2f624e9086396ae150db51dd0a337c3781d09a994af05a5",
+
+    patch_https =>
+      q[perl -pi -E 's{http://(www\.cpan\.org|backpan\.perl\.org|cpan\.metacpan\.org|fastapi\.metacpan\.org|cpanmetadb\.plackperl\.org)}{https://$1}g' bin/cpanm],
+    patch_nolwp => q[perl -pi -E 's{try_lwp=>1}{try_lwp=>0}g' bin/cpanm],
+  },
+  iosocketssl => {
+    name => "IO-Socket-SSL-2.085",
+    url  => "https://www.cpan.org/authors/id/S/SU/SULLR/IO-Socket-SSL-2.085.tar.gz",
+
+    # sha256 taken from http://www.cpan.org/authors/id/S/SU/SULLR/CHECKSUMS
+    sha256 => "95b2f7c0628a7e246a159665fbf0620d0d7835e3a940f22d3fdd47c3aa799c2e",
+  },
+  netssleay => {
+    name => "Net-SSLeay-1.94",
+    url  => "https://www.cpan.org/authors/id/C/CH/CHRISN/Net-SSLeay-1.94.tar.gz",
+
+    # sha256 taken from http://www.cpan.org/authors/id/C/CH/CHRISN/CHECKSUMS
+    sha256 => "9d7be8a56d1bedda05c425306cc504ba134307e0c09bda4a788c98744ebcd95d",
+  },
 );
 
 # sha256 checksum is from docker-perl team, cf https://github.com/docker-library/official-images/pull/12612#issuecomment-1158288299
 my %cpm = (
-  url    => "https://raw.githubusercontent.com/skaji/cpm/0.997011/cpm",
-  sha256 => "7dee2176a450a8be3a6b9b91dac603a0c3a7e807042626d3fe6c93d843f75610",
+  url    => "https://raw.githubusercontent.com/skaji/cpm/0.997017/cpm",
+  sha256 => "e3931a7d994c96f9c74b97d1b5b75a554fc4f06eadef1eca26ecc0bdcd1f2d11",
 );
 
 die_with_sample unless defined $config->{releases};
@@ -115,9 +138,9 @@ for my $release (@{$config->{releases}}) {
   die "Bad version: $release->{version}" unless $release->{version} =~ /\A5\.\d+\.\d+\Z/;
 
   my $patch;
-  $release->{type} ||= 'bz2';
-  my $file = "perl-$release->{version}.tar.$release->{type}";
-  my $url  = "https://www.cpan.org/src/5.0/$file";
+  my $tarball = CPAN::Perl::Releases::MetaCPAN::perl_tarballs($release->{version})->{'tar.gz'};
+  my ($file)  = File::Basename::fileparse($tarball);
+  my $url     = "https://cpan.metacpan.org/authors/id/$tarball";
   if (-f "downloads/$file" && `sha256sum downloads/$file` =~ /^\Q$release->{sha256}\E\s+\Qdownloads\/$file\E/) {
     print "Skipping download of $file, already current\n";
   }
@@ -130,7 +153,7 @@ for my $release (@{$config->{releases}}) {
     qx{rm -fR $dir};
     mkdir $dir or die "Couldn't create $dir";
     qx{
-      tar -C "downloads" -xf $dir.tar.$release->{type} &&\
+      tar -C "downloads" -xf $dir.tar.gz &&\
       cd $dir &&\
       find . -exec chmod u+w {} + &&\
       git init &&\
@@ -146,19 +169,22 @@ for my $release (@{$config->{releases}}) {
   }
 
   for my $build (keys %builds) {
-    $release->{url}             = $url;
-    $release->{"cpanm_dist_$_"} = $cpanm{$_} for keys %cpanm;
-    $release->{"cpm_dist_$_"}   = $cpm{$_} for keys %cpm;
+    $release->{url} = $url;
 
-    $release->{extra_flags}    ||= '';
+    for my $name (keys %install_modules) {
+      my $module = $install_modules{$name};
+      $release->{"${name}_dist_$_"} = $module->{$_} for keys %$module;
+    }
+    $release->{"cpm_dist_$_"} = $cpm{$_} for keys %cpm;
+
+    $release->{extra_flags} ||= '';
 
     $release->{image} = $build =~ /main/ ? 'buildpack-deps' : 'debian';
 
     for my $debian_release (@{$release->{debian_release}}) {
 
       my $output = $template;
-      $output =~ s/\{\{$_\}\}/$release->{$_}/mg
-        for (qw(version pause extra_flags sha256 type url image cpanm_dist_name cpanm_dist_url cpanm_dist_sha256 cpm_dist_url cpm_dist_sha256));
+      $output =~ s/\{\{$_\}\}/$release->{$_}/mg for keys %$release;
       $output =~ s/\{\{args\}\}/$builds{$build}/mg;
 
       if ($build =~ /slim/) {
@@ -194,8 +220,10 @@ for my $release (@{$config->{releases}}) {
         $output =~ s/\{\{test\}\}/TEST_JOBS=\$(nproc) make test_harness/;
       }
       elsif ($release->{run_tests} eq "no") {
+
         # https://metacpan.org/pod/Devel::PatchPerl#CAVEAT
         $output =~ s/\{\{test\}\}/LD_LIBRARY_PATH=. .\/perl -Ilib -de0/;
+
         # https://metacpan.org/pod/distribution/perl/INSTALL#Building-a-shared-Perl-library
       }
       else {
@@ -255,7 +283,6 @@ L<debian|https://hub.docker.com/_/debian> Docker images.
 This should be a list of tags for different Debian versions:
 
     - version: 5.30.0
-      type:    xz
       debian_release:
         - bullseye
         - buster
@@ -287,16 +314,15 @@ Default: C<yes>
 
 __DATA__
 FROM {{image}}:{{tag}}
-LABEL maintainer="Peter Martini <PeterCMartini@GMail.com>, Zak B. Elep <zakame@cpan.org>"
 
 {{docker_copy_perl_patch}}
 WORKDIR /usr/src/perl
 
 RUN {{docker_slim_run_install}} \
-    && curl -fL {{url}} -o perl-{{version}}.tar.{{type}} \
-    && echo '{{sha256}} *perl-{{version}}.tar.{{type}}' | sha256sum --strict --check - \
-    && tar --strip-components=1 -xaf perl-{{version}}.tar.{{type}} -C /usr/src/perl \
-    && rm perl-{{version}}.tar.{{type}} \
+    && curl -fL {{url}} -o perl-{{version}}.tar.gz \
+    && echo '{{sha256}} *perl-{{version}}.tar.gz' | sha256sum --strict --check - \
+    && tar --strip-components=1 -xaf perl-{{version}}.tar.gz -C /usr/src/perl \
+    && rm perl-{{version}}.tar.gz \
     && cat *.patch | patch -p1 \
     && gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)" \
     && archBits="$(dpkg-architecture --query DEB_BUILD_ARCH_BITS)" \
@@ -308,16 +334,24 @@ RUN {{docker_slim_run_install}} \
     && cd /usr/src \
     && curl -fLO {{cpanm_dist_url}} \
     && echo '{{cpanm_dist_sha256}} *{{cpanm_dist_name}}.tar.gz' | sha256sum --strict --check - \
-    && tar -xzf {{cpanm_dist_name}}.tar.gz && cd {{cpanm_dist_name}} && perl bin/cpanm . && cd /root \
-    && cpanm IO::Socket::SSL \
+    && tar -xzf {{cpanm_dist_name}}.tar.gz && cd {{cpanm_dist_name}} \
+    && {{cpanm_dist_patch_https}} \
+    && {{cpanm_dist_patch_nolwp}} \
+    && perl bin/cpanm . && cd /root \
+    && curl -fLO '{{netssleay_dist_url}}' \
+    && echo '{{netssleay_dist_sha256}} *{{netssleay_dist_name}}.tar.gz' | sha256sum --strict --check - \
+    && cpanm --from $PWD {{netssleay_dist_name}}.tar.gz \
+    && curl -fLO '{{iosocketssl_dist_url}}' \
+    && echo '{{iosocketssl_dist_sha256}} *{{iosocketssl_dist_name}}.tar.gz' | sha256sum --strict --check - \
+    && SSL_CERT_DIR=/etc/ssl/certs cpanm --from $PWD {{iosocketssl_dist_name}}.tar.gz \
     && curl -fL {{cpm_dist_url}} -o /usr/local/bin/cpm \
     # sha256 checksum is from docker-perl team, cf https://github.com/docker-library/official-images/pull/12612#issuecomment-1158288299
     && echo '{{cpm_dist_sha256}} */usr/local/bin/cpm' | sha256sum --strict --check - \
     && chmod +x /usr/local/bin/cpm \
     && {{docker_slim_run_purge}} \
-    && rm -fr /root/.cpanm /usr/src/perl /usr/src/{{cpanm_dist_name}}* /tmp/* \
+    && rm -fr /root/.cpanm /root/{{netssleay_dist_name}}* /root/{{iosocketssl_dist_name}}* /usr/src/perl /usr/src/{{cpanm_dist_name}}* /tmp/* \
     && cpanm --version && cpm --version
 
-WORKDIR /
+WORKDIR /usr/src/app
 
 CMD ["perl{{version}}","-de0"]

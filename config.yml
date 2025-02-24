@@ -8,31 +8,27 @@ options:
   threaded: "-Dusethreads"
 
 releases:
-  - version: 5.37.11
-    sha256:  3946b00266595ccc44df28275e2fbb7b86c1482934cbeab2780db304a75ffd58
+  - version: 5.41.8
+    sha256:  2b13022a1b3e4648ffbdc51812e6b83cd7990095771989a236ec4edb2a55604e
     extra_flags: "-Dusedevel -Dversiononly=undef"
-    type:    xz
     debian_release:
-      - buster
       - bullseye
+      - bookworm
 
-  - version: 5.32.1
-    sha256:  57cc47c735c8300a8ce2fa0643507b44c4ae59012bfdad0121313db639e02309
-    type:    xz
+  - version: 5.36.3
+    sha256:  f2a1ad88116391a176262dd42dfc52ef22afb40f4c0e9810f15d561e6f1c726a
     debian_release:
-      - buster
       - bullseye
+      - bookworm
 
-  - version: 5.34.1
-    sha256:  6d52cf833ff1af27bb5e986870a2c30cec73c044b41e3458cd991f94374039f7
-    type:    xz
+  - version: 5.38.3
+    sha256:  8a8033859dd1d75eb0c9158eedd7384df1af6b46a2a4e85073b07e6cc7c5b873
     debian_release:
-      - buster
       - bullseye
+      - bookworm
 
-  - version: 5.36.1
-    sha256:  bd91217ea8a8c8b81f21ebbb6cefdf0d13ae532013f944cdece2cd51aef4b6a7
-    type:    xz
+  - version: 5.40.1
+    sha256:  02f8c45bb379ed0c3de7514fad48c714fd46be8f0b536bfd5320050165a1ee26
     debian_release:
-      - buster
       - bullseye
+      - bookworm
